@@ -3,3 +3,11 @@ work
 agent
 .secrets
 .env
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Build artifacts (distribute via GitHub Releases)
+releases/*.hpi
