@@ -36,7 +36,7 @@
     <jenkins.version>2.516.3</jenkins.version>
     <bom.artifactId>bom-2.516.x</bom.artifactId>
     <bom.version>5353.v3dec76e40169</bom.version>
-    <hpi.version>3.62</hpi.version>
+    <hpi.version>3.1816.v6ed1e566d656</hpi.version>
 
     <gitHubRepo>jenkinsci/${project.artifactId}-plugin</gitHubRepo>
     <spotless.check.skip>true</spotless.check.skip>
