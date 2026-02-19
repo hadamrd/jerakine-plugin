@@ -1,338 +1,147 @@
-# Jenkins Jerakin Deployment Framework
+# Jerakin - Configuration-Driven Deployment Framework for Jenkins
 
-A comprehensive Jenkins plugin that provides configuration-driven deployment automation with environment-based access controls, job templating, and infrastructure orchestration. This plugin enables teams to define reusable deployment patterns while maintaining security and infrastructure isolation.
+A Jenkins plugin that replaces manually configured jobs with **template-based, YAML-driven deployments**. Define deployment patterns once as templates, create job instances from them, and let Jerakin handle environment access control, credential injection, and infrastructure selection automatically.
 
-## Features
+## Quick Start
 
-- **Configuration-as-Code**: Define entire deployment workflows using JCaS YAML
-- **Job Templates**: Create reusable deployment patterns with parameterized scripts
-- **Environment Access Control**: ACL-based restrictions with user/group permissions
-- **Dynamic Infrastructure Selection**: Automatic node selection based on environment mapping
-- **Parameter Precedence**: UI parameters can be overridden by job-specific configuration
-- **Ansible Integration**: Built-in support for containerized Ansible execution
-- **Credential Management**: Environment-specific SSH keys and vault credentials
-
-## Architecture
-
-The plugin operates on three main concepts:
-
-1. **Environment Groups**: Define infrastructure topology and access credentials
-2. **Job Templates**: Reusable deployment patterns with parameterized execution
-3. **Deployment Jobs**: Specific instances that reference templates with custom parameters
-
-## Configuration
-
-### Environment Groups & Access Control
-
-Define environment groups with associated infrastructure and credentials:
+1. Install the `.hpi` file from [Releases](https://github.com/hadamrd/jerakine-plugin/releases)
+2. Add this to your Jenkins Configuration as Code (JCasC):
 
 ```yaml
 unclassified:
+  # Define your environments and who can access them
   environmentACL:
     environmentGroups:
       - name: "production"
-        description: "Production environments"
-        environments:
-          - "prod-eu"
-          - "prod-us"
-        nodeLabels:
-          - "prod-agent"
+        environments: ["prod-eu", "prod-us"]
+        nodeLabels: ["prod-agent"]
         sshCredentialId: "prod-ssh-key"
-        vaultCredentials:
-          - vaultId: "prod"
-            credentialId: "prod-vault-key"
-        tags:
-          - "production"
-          - "critical"
-      
+        tags: ["production", "critical"]
       - name: "development"
-        description: "Development environments"
-        environments:
-          - "dev"
-          - "staging"
-        nodeLabels:
-          - "dev-agent"
+        environments: ["dev", "staging"]
+        nodeLabels: ["dev-agent"]
         sshCredentialId: "dev-ssh-key"
-
     aclRules:
-      - name: "sre-production-access"
+      - name: "ops-prod-access"
         type: "allow"
         priority: 300
         jobs: ["*"]
         environmentGroups: ["production"]
-        users: ["sre-team"]
-      
-      - name: "developers-dev-access"
+        groups: ["ops"]
+      - name: "devs-dev-access"
         type: "allow"
         priority: 200
         jobs: ["*"]
         environmentGroups: ["development"]
-        users: ["dev-team"]
-```
+        groups: ["developers"]
 
-### Ansible Project Configuration
-
-Configure Ansible projects with environment-specific inventory mapping:
-
-```yaml
-unclassified:
-  ansibleProjects:
-    projects:
-      - id: "infrastructure"
-        repository: "https://github.com/company/ansible-infrastructure"
-        defaultBranch: "main"
-        execEnv: "local/ansible:latest"
-        envGroups:
-          - groupName: "production"
-            inventoryPathTemplate: "inventory/prod"
-            vaultIds: ["prod"]
-          - groupName: "development"
-            inventoryPathTemplate: "inventory/dev"
-            vaultIds: ["dev"]
-        vaults:
-          - id: "prod"
-            credentialId: "prod-ansible-vault"
-          - id: "dev"
-            credentialId: "dev-ansible-vault"
-```
-
-### Job Templates & Deployment Jobs
-
-Define reusable templates and specific job instances:
-
-```yaml
-unclassified:
-  pulsarDeployments:
+  # Define deployment templates and jobs
+  jerakinDeployments:
     templates:
-      - name: "ansible-deployment"
-        description: "Standard Ansible deployment template"
+      - name: "ansible-deploy"
         params:
           - name: "environment"
             type: "environment"
-            description: "Target environment"
-          - name: "ref"
-            type: "ansibleProjectRef"
-            description: "Ansible project reference"
-            properties:
-              - name: "projectId"
-                value: "infrastructure"
           - name: "playbook"
             type: "string"
-            description: "Playbook to execute"
         script: |
-          def deployParams = resolveDeployParams(jobId: env.JOB_BASE_NAME)
-          
           node(deployParams.nodeLabels) {
-            ansibleProject(projectId: 'infrastructure', ref: deployParams.ref) {
-              ansiblePlaybook(
-                user: 'ansible',
-                playbook: deployParams.playbook,
-                envName: deployParams.environment
-              )
+            ansibleProject(projectId: 'infra', ref: 'main') {
+              ansiblePlaybook(playbook: deployParams.playbook, envName: deployParams.environment)
             }
           }
-
     jobs:
-      - id: "deploy-webservers"
+      - id: "deploy-web"
         name: "Deploy Web Servers"
         category: "Infrastructure"
-        templateName: "ansible-deployment"
+        templateName: "ansible-deploy"
         params:
           - name: "playbook"
-            value: "webserver.yml"  # Fixed parameter
-      
-      - id: "deploy-databases"
-        name: "Deploy Database Cluster"
-        category: "Infrastructure"
-        templateName: "ansible-deployment"
-        params:
-          - name: "playbook"
-            value: "database.yml"
-          - name: "ref"
-            value: "stable"  # Force stable branch
+            value: "webserver.yml"  # Fixed — users only pick environment
 ```
 
-## Parameter Resolution & Precedence
+3. Jerakin auto-generates Jenkins jobs under `projects/<category>/JerakinJob_<id>`
 
-The framework resolves parameters with the following precedence (highest to lowest):
+## How It Works
 
-1. **Job-level fixed parameters** (defined in job config)
-2. **Step configuration** (passed to `resolveDeployParams`)
-3. **UI parameters** (filled by user when running the job)
+**Three concepts:**
 
-### Example Resolution
+| Concept | What it does |
+|---|---|
+| **Environment Groups** | Map environments to infrastructure: node labels, SSH keys, vault credentials, access tags |
+| **Templates** | Reusable deployment patterns with typed parameters and a pipeline script |
+| **Jobs** | Instances of templates with fixed parameter overrides |
 
-For a job with this configuration:
-```yaml
-params:
-  - name: "playbook"
-    value: "webserver.yml"  # Fixed by job config
-```
+**Parameter precedence** (highest wins):
+1. Job-level fixed params (from YAML config)
+2. Step config (from `resolveDeployParams()` call)
+3. UI params (what the user fills in)
 
-And a template with these parameters:
-```yaml
-params:
-  - name: "environment"
-    type: "environment"
-  - name: "playbook"
-    type: "string"
-```
+Parameters fixed by the job config are automatically hidden from the build UI.
 
-**Result:**
-- User sees only "environment" parameter in UI (playbook is fixed)
-- `resolveDeployParams` returns `{environment: "prod-eu", playbook: "webserver.yml"}`
-- Template script uses `deployParams.playbook` which is always "webserver.yml"
-
-## Generated Jobs
-
-The plugin automatically creates Jenkins jobs based on your configuration:
+## Generated Job Structure
 
 ```
 projects/
 ├── Infrastructure/
-│   ├── PulsarJob_deploy-webservers    # Only shows 'environment' parameter
-│   └── PulsarJob_deploy-databases     # Shows 'environment' only (ref fixed to 'stable')
+│   ├── JerakinJob_deploy-web         # User only sees 'environment'
+│   └── JerakinJob_deploy-databases   # User only sees 'environment'
 └── Applications/
-    └── PulsarJob_app-deployment
+    └── JerakinJob_app-deploy         # User sees 'environment' + 'version'
 ```
-
-Each job:
-- Shows only non-fixed template parameters as build parameters
-- Runs on appropriate nodes based on environment selection
-- Has access to environment-specific credentials
-- Executes the template script with resolved parameters
 
 ## Pipeline Steps
 
 ### `resolveDeployParams`
-
-Resolves deployment parameters with proper precedence and infrastructure context.
-
+Resolves parameters with precedence and adds infrastructure context:
 ```groovy
-def deployParams = resolveDeployParams(jobId: 'deploy-webservers')
-
-// Returns:
-// {
-//   environment: "prod-eu",
-//   playbook: "webserver.yml",
-//   nodeLabels: "prod-agent",
-//   ref: "main"
-// }
+def deployParams = resolveDeployParams(jobId: 'deploy-web')
+// → {environment: "prod-eu", playbook: "webserver.yml", nodeLabels: "prod-agent"}
 ```
 
 ### `ansibleProject`
-
-Creates isolated Ansible execution environment:
-
+Creates an isolated Ansible execution environment (Git clone + container):
 ```groovy
-ansibleProject(projectId: 'infrastructure', ref: deployParams.ref) {
-    ansiblePlaybook(
-        user: 'ansible',
-        playbook: deployParams.playbook,
-        envName: deployParams.environment
-    )
+ansibleProject(projectId: 'infra', ref: deployParams.ref) {
+    ansiblePlaybook(playbook: 'site.yml', envName: deployParams.environment)
 }
 ```
 
 ### `checkEnvironmentACL`
-
-Validates environment access and provides credential information:
-
+Validates environment access and returns credential info:
 ```groovy
-def aclResult = checkEnvironmentACL(deployParams.environment)
-// Returns access status, SSH credentials, vault mappings
+def acl = checkEnvironmentACL(deployParams.environment)
 ```
 
 ## Security Model
 
-### Access Control
-- Users only see environments they have permission to access
-- Environment parameters are filtered based on ACL rules
-- Access denials are logged for security auditing
+- **Deny-first ACL**: Users only see environments they're authorized for
+- **Priority-based rules**: Higher priority rules evaluated first, deny always wins
+- **Multiple matching**: Rules match by user, group, environment, environment group, or tag
+- **Credential isolation**: SSH keys and vault passwords are per-environment-group
+- **Infrastructure isolation**: Jobs run on environment-appropriate nodes
 
-### Credential Management
-- SSH keys are environment-specific and managed through Jenkins credentials
-- Ansible vault passwords are mapped per environment group
-- No credentials are exposed in pipeline logs
+## Modules
 
-### Infrastructure Isolation
-- Jobs run on environment-appropriate nodes based on labels
-- Container isolation for Ansible execution
-- Environment-specific inventory and configuration
+| Module | Purpose |
+|---|---|
+| `deployment` | Template engine, job generation, parameter resolution |
+| `environment` | ACL rules, environment groups, credential mapping |
+| `ansible` | Ansible project registry, containerized playbook execution |
+| `ssh` | SSH environment definitions, connection pooling |
+| `container` | Docker container lifecycle with reference counting |
 
-## Use Cases
+## Development
 
-### Standard Infrastructure Deployment
-```yaml
-# Template defines the pattern
-templates:
-  - name: "infrastructure"
-    params:
-      - name: "environment"
-        type: "environment"
-      - name: "component"
-        type: "choice"
-        properties:
-          - name: "choices"
-            value: "webserver,database,loadbalancer"
-
-# Jobs customize for specific components
-jobs:
-  - id: "deploy-webserver"
-    templateName: "infrastructure"
-    params:
-      - name: "component"
-        value: "webserver"  # Users only select environment
+```bash
+make build    # Build plugin (skip tests)
+make test     # Run unit tests
+make verify   # Full verification (tests + spotless + spotbugs)
+make run      # Start Jenkins in dev mode on port 8080
 ```
 
-### Application Deployment with Version Control
-```yaml
-templates:
-  - name: "app-deployment"
-    params:
-      - name: "version"
-        type: "string"
-        description: "Application version"
-      - name: "environment"
-        type: "environment"
+Requires Java 21+ and Maven 3.9+.
 
-jobs:
-  - id: "deploy-api-prod"
-    templateName: "app-deployment"
-    params:
-      - name: "environment"
-        value: "prod-eu"  # Lock to production
-```
+## License
 
-### Multi-Environment Rollout
-```yaml
-jobs:
-  - id: "rollout-feature"
-    templateName: "app-deployment"
-    # No fixed params - users select any environment and version
-```
-
-## Benefits
-
-1. **Standardization**: Templates ensure consistent deployment patterns
-2. **Security**: Environment-based access control with credential isolation
-3. **Flexibility**: Parameter precedence allows customization without duplication
-4. **Maintainability**: Configuration-as-code approach with centralized management
-5. **Scalability**: One template can generate dozens of specialized jobs
-6. **Compliance**: Built-in access logging and environment restrictions
-
-## Migration from Legacy Jobs
-
-Replace manual job creation with template-based configuration:
-
-**Before:**
-- 50 manually created Jenkins jobs
-- Copy-paste configuration with subtle differences
-- Manual credential management
-
-**After:**
-- 3 job templates
-- 50 job definitions in JCaS YAML
-- Automatic credential and infrastructure mapping
-
-The framework transforms deployment management from job-centric to pattern-centric, enabling teams to focus on deployment logic rather than Jenkins configuration.
+MIT

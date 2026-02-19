@@ -29,7 +29,7 @@ github-release: release-build
 		--title "Jerakin Plugin v$(PLUGIN_VERSION)" \
 		--notes "Configuration-driven Jenkins deployment framework with job templating and environment access control."
 
-release: lint release-build github-release update-center
+release: verify release-build github-release
 	@echo "Jerakin plugin $(PLUGIN_VERSION) released!"
 
 run:

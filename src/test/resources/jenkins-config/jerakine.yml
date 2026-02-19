@@ -32,7 +32,7 @@ unclassified:
         tags:
           - "production"
           - "critical"
-  pulsarDeployments:
+  jerakinDeployments:
     jobs:
       - id: "ping-vm"
         name: "Ping an environment"
