@@ -16,23 +16,39 @@ public final class EnvironmentACLChecker {
 
     public static boolean hasAccess(String userId, List<String> userGroups, String jobName, String environment) {
         EnvironmentACLGlobalConfiguration config = EnvironmentACLGlobalConfiguration.get();
-        List<ACLRule> rules = config.getAclRules();
+        return hasAccess(
+                config.getAclRules(), config.getEnvironmentGroups(), userId, userGroups, jobName, environment);
+    }
+
+    /**
+     * Core ACL evaluation logic, independent of Jenkins global configuration. This method is
+     * package-private to enable direct unit testing of the access control logic without requiring a
+     * running Jenkins instance.
+     */
+    static boolean hasAccess(
+            List<ACLRule> rules,
+            List<EnvironmentGroup> environmentGroups,
+            String userId,
+            List<String> userGroups,
+            String jobName,
+            String environment) {
 
         // Sort by priority (higher first)
-        rules.sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()));
+        List<ACLRule> sortedRules = new java.util.ArrayList<>(rules);
+        sortedRules.sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()));
 
         // Check deny rules first
-        for (ACLRule rule : rules) {
+        for (ACLRule rule : sortedRules) {
             if ("deny".equalsIgnoreCase(rule.getType())
-                    && matchesRule(rule, userId, userGroups, jobName, environment)) {
+                    && matchesRule(rule, environmentGroups, userId, userGroups, jobName, environment)) {
                 return false;
             }
         }
 
         // Check allow rules
-        for (ACLRule rule : rules) {
+        for (ACLRule rule : sortedRules) {
             if ("allow".equalsIgnoreCase(rule.getType())
-                    && matchesRule(rule, userId, userGroups, jobName, environment)) {
+                    && matchesRule(rule, environmentGroups, userId, userGroups, jobName, environment)) {
                 return true;
             }
         }
@@ -53,14 +69,19 @@ public final class EnvironmentACLChecker {
         return hasAccess(context.getUserId(), context.getGroups(), jobName, environment);
     }
 
-    private static boolean matchesRule(
-            ACLRule rule, String userId, List<String> userGroups, String jobName, String environment) {
+    static boolean matchesRule(
+            ACLRule rule,
+            List<EnvironmentGroup> environmentGroups,
+            String userId,
+            List<String> userGroups,
+            String jobName,
+            String environment) {
         return matchesJob(rule, jobName)
-                && matchesEnvironment(rule, environment)
+                && matchesEnvironment(rule, environmentGroups, environment)
                 && matchesUserOrGroup(rule, userId, userGroups);
     }
 
-    private static boolean matchesJob(ACLRule rule, String jobName) {
+    static boolean matchesJob(ACLRule rule, String jobName) {
         return rule.getJobs().stream().anyMatch(jobPattern -> {
             if ("*".equals(jobPattern)) {
                 return true;
@@ -74,17 +95,21 @@ public final class EnvironmentACLChecker {
         });
     }
 
-    private static boolean matchesEnvironment(ACLRule rule, String environment) {
-        EnvironmentACLGlobalConfiguration config = EnvironmentACLGlobalConfiguration.get();
-
+    static boolean matchesEnvironment(
+            ACLRule rule, List<EnvironmentGroup> environmentGroups, String environment) {
         // Direct environment match
         if (rule.getEnvironments().contains("*") || rule.getEnvironments().contains(environment)) {
             return true;
         }
 
+        // Find the group for this environment
+        EnvironmentGroup group = environmentGroups.stream()
+                .filter(g -> g.getEnvironments().contains(environment))
+                .findFirst()
+                .orElse(null);
+
         // Environment group match
         if (!rule.getEnvironmentGroups().isEmpty()) {
-            EnvironmentGroup group = config.getEnvironmentGroupForEnvironment(environment);
             if (group != null
                     && (rule.getEnvironmentGroups().contains("*")
                             || rule.getEnvironmentGroups().contains(group.getName()))) {
@@ -94,7 +119,6 @@ public final class EnvironmentACLChecker {
 
         // Environment tags match
         if (!rule.getEnvironmentTags().isEmpty()) {
-            EnvironmentGroup group = config.getEnvironmentGroupForEnvironment(environment);
             if (group != null && group.getTags() != null) {
                 boolean tagMatch = rule.getEnvironmentTags().stream()
                         .anyMatch(ruleTag ->
@@ -108,7 +132,7 @@ public final class EnvironmentACLChecker {
         return false;
     }
 
-    private static boolean matchesUserOrGroup(ACLRule rule, String userId, List<String> userGroups) {
+    static boolean matchesUserOrGroup(ACLRule rule, String userId, List<String> userGroups) {
         if (rule.getUsers().contains(userId) || rule.getUsers().contains("*")) {
             return true;
         }
