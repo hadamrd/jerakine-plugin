@@ -3,7 +3,7 @@ unclassified:
     libraries:
       - defaultVersion: "main"
         includeInChangesets: false
-        name: "pulsar-library"
+        name: "jerakin-library"
         retriever:
           modernSCM:
             libraryPath: "./src/test/resources/library"

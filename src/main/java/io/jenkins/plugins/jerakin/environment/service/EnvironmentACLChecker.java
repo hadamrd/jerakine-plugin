@@ -1,0 +1,192 @@
+package io.jenkins.plugins.jerakin.environment.service;
+
+import hudson.model.Run;
+import io.jenkins.plugins.jerakin.environment.EnvironmentACLGlobalConfiguration;
+import io.jenkins.plugins.jerakin.environment.model.ACLRule;
+import io.jenkins.plugins.jerakin.environment.model.EnvironmentGroup;
+import io.jenkins.plugins.jerakin.shared.UserContextHelper;
+import io.jenkins.plugins.jerakin.shared.UserContextHelper.UserContext;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+public final class EnvironmentACLChecker {
+
+    private EnvironmentACLChecker() {}
+
+    public static boolean hasAccess(String userId, List<String> userGroups, String jobName, String environment) {
+        EnvironmentACLGlobalConfiguration config = EnvironmentACLGlobalConfiguration.get();
+        return hasAccess(
+                config.getAclRules(), config.getEnvironmentGroups(), userId, userGroups, jobName, environment);
+    }
+
+    /**
+     * Core ACL evaluation logic, independent of Jenkins global configuration. This method is
+     * package-private to enable direct unit testing of the access control logic without requiring a
+     * running Jenkins instance.
+     */
+    static boolean hasAccess(
+            List<ACLRule> rules,
+            List<EnvironmentGroup> environmentGroups,
+            String userId,
+            List<String> userGroups,
+            String jobName,
+            String environment) {
+
+        // Sort by priority (higher first)
+        List<ACLRule> sortedRules = new java.util.ArrayList<>(rules);
+        sortedRules.sort((a, b) -> Integer.compare(b.getPriority(), a.getPriority()));
+
+        // Check deny rules first
+        for (ACLRule rule : sortedRules) {
+            if ("deny".equalsIgnoreCase(rule.getType())
+                    && matchesRule(rule, environmentGroups, userId, userGroups, jobName, environment)) {
+                return false;
+            }
+        }
+
+        // Check allow rules
+        for (ACLRule rule : sortedRules) {
+            if ("allow".equalsIgnoreCase(rule.getType())
+                    && matchesRule(rule, environmentGroups, userId, userGroups, jobName, environment)) {
+                return true;
+            }
+        }
+
+        return false; // Default deny
+    }
+
+    /** Check access using current authentication context (for UI/parameters) */
+    public static boolean hasAccess(String jobName, String environment) {
+        UserContext context = UserContextHelper.getCurrentUserContext();
+        return hasAccess(context.getUserId(), context.getGroups(), jobName, environment);
+    }
+
+    /** Check access using build run context (for pipeline steps) */
+    public static boolean hasAccess(Run<?, ?> run, String environment) {
+        UserContext context = UserContextHelper.getUserContextFromRun(run);
+        String jobName = run.getParent().getFullName();
+        return hasAccess(context.getUserId(), context.getGroups(), jobName, environment);
+    }
+
+    static boolean matchesRule(
+            ACLRule rule,
+            List<EnvironmentGroup> environmentGroups,
+            String userId,
+            List<String> userGroups,
+            String jobName,
+            String environment) {
+        return matchesJob(rule, jobName)
+                && matchesEnvironment(rule, environmentGroups, environment)
+                && matchesUserOrGroup(rule, userId, userGroups);
+    }
+
+    static boolean matchesJob(ACLRule rule, String jobName) {
+        return rule.getJobs().stream().anyMatch(jobPattern -> {
+            if ("*".equals(jobPattern)) {
+                return true;
+            }
+            try {
+                Pattern pattern = Pattern.compile(jobPattern);
+                return pattern.matcher(jobName).matches();
+            } catch (Exception e) {
+                return jobPattern.equals(jobName);
+            }
+        });
+    }
+
+    static boolean matchesEnvironment(
+            ACLRule rule, List<EnvironmentGroup> environmentGroups, String environment) {
+        // Direct environment match
+        if (rule.getEnvironments().contains("*") || rule.getEnvironments().contains(environment)) {
+            return true;
+        }
+
+        // Find the group for this environment
+        EnvironmentGroup group = environmentGroups.stream()
+                .filter(g -> g.getEnvironments().contains(environment))
+                .findFirst()
+                .orElse(null);
+
+        // Environment group match
+        if (!rule.getEnvironmentGroups().isEmpty()) {
+            if (group != null
+                    && (rule.getEnvironmentGroups().contains("*")
+                            || rule.getEnvironmentGroups().contains(group.getName()))) {
+                return true;
+            }
+        }
+
+        // Environment tags match
+        if (!rule.getEnvironmentTags().isEmpty()) {
+            if (group != null && group.getTags() != null) {
+                boolean tagMatch = rule.getEnvironmentTags().stream()
+                        .anyMatch(ruleTag ->
+                                "*".equals(ruleTag) || group.getTags().contains(ruleTag));
+                if (tagMatch) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    static boolean matchesUserOrGroup(ACLRule rule, String userId, List<String> userGroups) {
+        if (rule.getUsers().contains(userId) || rule.getUsers().contains("*")) {
+            return true;
+        }
+        return rule.getGroups().stream().anyMatch(group -> "*".equals(group) || userGroups.contains(group));
+    }
+
+    public static List<String> getAccessibleEnvironments(String jobName) {
+        UserContext context = UserContextHelper.getCurrentUserContext();
+        EnvironmentACLGlobalConfiguration config = EnvironmentACLGlobalConfiguration.get();
+        List<String> allEnvironments = config.getAllEnvironments();
+
+        return allEnvironments.stream()
+                .filter(env -> hasAccess(context.getUserId(), context.getGroups(), jobName, env))
+                .collect(Collectors.toList());
+    }
+
+    public static List<String> getAccessibleEnvironmentGroups(String userId, List<String> userGroups, String jobName) {
+        EnvironmentACLGlobalConfiguration config = EnvironmentACLGlobalConfiguration.get();
+        return config.getEnvironmentGroups().stream()
+                .filter(group ->
+                        group.getEnvironments().stream().anyMatch(env -> hasAccess(userId, userGroups, jobName, env)))
+                .map(group -> group.getName())
+                .collect(Collectors.toList());
+    }
+
+    /** Get accessible environments filtered by environment group */
+    public static List<String> getAccessibleEnvironmentsByGroup(String jobName, String environmentGroup) {
+        UserContext context = UserContextHelper.getCurrentUserContext();
+        EnvironmentACLGlobalConfiguration config = EnvironmentACLGlobalConfiguration.get();
+        List<String> allEnvironments = config.getAllEnvironments();
+
+        return allEnvironments.stream()
+                .filter(env -> {
+                    // First check ACL access
+                    if (!hasAccess(context.getUserId(), context.getGroups(), jobName, env)) {
+                        return false;
+                    }
+
+                    // Then check environment group if specified
+                    if (environmentGroup == null || environmentGroup.trim().isEmpty() || "*".equals(environmentGroup)) {
+                        return true; // No group filter, include all ACL-accessible envs
+                    }
+
+                    EnvironmentGroup group = config.getEnvironmentGroupForEnvironment(env);
+                    return group != null && environmentGroup.equals(group.getName());
+                })
+                .collect(Collectors.toList());
+    }
+
+    /** Get all available environment group names */
+    public static List<String> getAllEnvironmentGroupNames() {
+        EnvironmentACLGlobalConfiguration config = EnvironmentACLGlobalConfiguration.get();
+        return config.getEnvironmentGroups().stream()
+                .map(EnvironmentGroup::getName)
+                .collect(Collectors.toList());
+    }
+}
