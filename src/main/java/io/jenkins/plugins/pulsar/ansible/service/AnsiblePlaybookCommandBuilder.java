@@ -4,12 +4,19 @@ import io.jenkins.plugins.pulsar.ansible.model.AnsibleVault;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Builder for ansible-playbook commands. Handles command construction with proper escaping and
  * parameter formatting.
  */
 public class AnsiblePlaybookCommandBuilder {
+
+    /**
+     * Pattern for safe shell identifiers: alphanumeric, hyphens, underscores, dots, and forward
+     * slashes (for paths). Rejects shell metacharacters like ;, $, `, |, &, etc.
+     */
+    static final Pattern SAFE_IDENTIFIER = Pattern.compile("[a-zA-Z0-9_./@:-]+");
 
     private String playbook;
     private String user = "ansible";
@@ -56,9 +63,7 @@ public class AnsiblePlaybookCommandBuilder {
 
     /** Build the complete command including directory change */
     public String buildCmd() {
-        if (playbook == null) {
-            throw new IllegalStateException("Playbook is required");
-        }
+        validate();
 
         List<String> commandParts = new ArrayList<>();
 
@@ -66,6 +71,7 @@ public class AnsiblePlaybookCommandBuilder {
 
         // Change to project directory
         if (projectRoot != null) {
+            requireSafeIdentifier(projectRoot, "projectRoot");
             commandParts.add("cd " + projectRoot);
         }
 
@@ -77,20 +83,19 @@ public class AnsiblePlaybookCommandBuilder {
 
     /** Build just the ansible-playbook command (without cd) */
     public String buildAnsibleCommand() {
-        if (playbook == null) {
-            throw new IllegalStateException("Playbook is required");
-        }
+        validate();
 
         List<String> cmd = new ArrayList<>();
 
-        // Base command
+        // Base command — playbook path is validated by validate()
         cmd.add("ansible-playbook " + playbook);
 
-        // User
+        // User — validated by validate()
         cmd.add("-u " + user);
 
         // Inventory
         if (inventory != null) {
+            requireSafeIdentifier(inventory, "inventory");
             cmd.add("-i '" + inventory + "'");
         }
 
@@ -134,14 +139,34 @@ public class AnsiblePlaybookCommandBuilder {
         return parts;
     }
 
-    /** Escape special characters in values */
-    private String escapeValue(String value) {
+    /**
+     * Escape a value for safe embedding inside single-quoted shell strings. In POSIX shell, nothing
+     * is interpreted inside single quotes except the closing single quote itself. The standard
+     * idiom to embed a literal single quote is: end the current single-quoted string, add an
+     * escaped single quote, and start a new single-quoted string: {@code 'it'\''s safe'}
+     */
+    static String escapeValue(String value) {
         if (value == null) {
             return "";
         }
 
-        // Escape double quotes and backslashes
-        return value.replaceAll("\\\\", "\\\\\\\\").replaceAll("\"", "\\\\\"").replaceAll("'", "\\\\'");
+        // Inside single quotes, only ' needs escaping. The escape idiom is: '\''
+        return value.replace("'", "'\\''");
+    }
+
+    /**
+     * Validate that a string contains only safe characters for use as a shell identifier (path,
+     * username, etc.). Rejects shell metacharacters that could enable command injection.
+     */
+    static void requireSafeIdentifier(String value, String fieldName) {
+        if (value == null || value.isEmpty()) {
+            throw new IllegalArgumentException(fieldName + " must not be empty");
+        }
+        if (!SAFE_IDENTIFIER.matcher(value).matches()) {
+            throw new IllegalArgumentException(
+                    fieldName + " contains unsafe characters: " + value
+                            + " (only alphanumeric, hyphens, underscores, dots, slashes allowed)");
+        }
     }
 
     /** Create a summary of the command for logging */
@@ -165,14 +190,22 @@ public class AnsiblePlaybookCommandBuilder {
         return summary.toString();
     }
 
-    /** Validate that all required parameters are set */
+    /** Validate that all required parameters are set and safe */
     public void validate() {
         if (playbook == null || playbook.trim().isEmpty()) {
             throw new IllegalArgumentException("Playbook is required");
         }
+        requireSafeIdentifier(playbook, "playbook");
 
         if (user == null || user.trim().isEmpty()) {
             throw new IllegalArgumentException("User is required");
+        }
+        requireSafeIdentifier(user, "user");
+
+        if (extraVars != null) {
+            for (String key : extraVars.keySet()) {
+                requireSafeIdentifier(key, "extra var key");
+            }
         }
     }
 }

@@ -8,6 +8,14 @@ build:
 	@echo "Building jerakin plugin version $(PLUGIN_VERSION)..."
 	mvn clean package -DskipTests
 
+test:
+	@echo "Running tests..."
+	mvn test
+
+verify:
+	@echo "Running full verification (tests + spotless + spotbugs)..."
+	mvn verify -Dspotless.check.skip=false -Dspotbugs.skip=false
+
 # Release builds
 release-build:
 	@echo "Building release version $(PLUGIN_VERSION)..."
@@ -35,9 +43,14 @@ version-bump:
 	mvn versions:set -DnewVersion=$$version -DgenerateBackupPoms=false
 
 help:
-	@echo "Distribution commands:"
+	@echo "Development commands:"
+	@echo "  make build            - Build plugin (skip tests)"
+	@echo "  make test             - Run unit tests"
+	@echo "  make verify           - Full verification (tests + spotless + spotbugs)"
+	@echo "  make run              - Start Jenkins in dev mode"
+	@echo ""
+	@echo "Release commands:"
 	@echo "  make release-build    - Build release version"
 	@echo "  make github-release   - Create GitHub release"
-	@echo "  make update-center    - Generate update center JSON"
 	@echo "  make release          - Complete release workflow"
 	@echo "  make version-bump     - Update version number"
