@@ -35,7 +35,7 @@
     <changelist></changelist>
     <jenkins.version>2.516.3</jenkins.version>
     <bom.artifactId>bom-2.516.x</bom.artifactId>
-    <bom.version>5353.v3dec76e40169</bom.version>
+    <bom.version>6210.v69ea_fd8a_f010</bom.version>
     <hpi.version>3.62</hpi.version>
 
     <gitHubRepo>jenkinsci/${project.artifactId}-plugin</gitHubRepo>
